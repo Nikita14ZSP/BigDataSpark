@@ -1,0 +1,113 @@
+#version: '3.8'
+
+services:
+  postgres_db:
+    image: postgres:15
+    container_name: lab2_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: lab_user
+      POSTGRES_PASSWORD: lab_password
+      POSTGRES_DB: lab_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pgdata_lab2:/var/lib/postgresql/data
+      - ./init-db-postgres:/docker-entrypoint-initdb.d
+      - ./mock_data_csvs:/csv_data 
+    networks:
+      - etl_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lab_user -d lab_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clickhouse_server:
+    image: clickhouse/clickhouse-server:latest # yandex/clickhouse-server
+    container_name: lab2_clickhouse
+    restart: always
+    ports:
+      - "8123:8123" 
+      - "9000:9000" 
+    ulimits: 
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - ./clickhouse_data_lab2:/var/lib/clickhouse
+      - ./init-db-clickhouse:/docker-entrypoint-initdb.d 
+    networks:
+      - etl_network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  spark-master:
+    image: bitnami/spark:latest 
+    container_name: lab2_spark_master
+    ports:
+      - "8080:8080" 
+      - "7077:7077" 
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - ./spark-apps:/opt/spark-apps 
+      - ./jars:/opt/spark-jars    
+      - ./mock_data_csvs:/opt/mock_data 
+    networks:
+      - etl_network
+
+  spark-worker:
+    image: bitnami/spark:latest
+    container_name: lab2_spark_worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077 
+      - SPARK_WORKER_MEMORY=1G 
+      - SPARK_WORKER_CORES=1
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes: 
+      - ./spark-apps:/opt/spark-apps
+      - ./jars:/opt/spark-jars
+      - ./mock_data_csvs:/opt/mock_data
+    networks:
+      - etl_network
+
+  jupyter-notebook:
+    image: jupyter/pyspark-notebook:latest 
+    container_name: lab2_jupyter
+    ports:
+      - "8888:8888" 
+      - "4040:4040" 
+    environment:
+      - JUPYTER_ENABLE_LAB=yes 
+    volumes:
+      - ./notebooks:/home/jovyan/work 
+      - ./spark-apps:/home/jovyan/spark-apps 
+      - ./jars:/home/jovyan/jars         
+      - ./mock_data_csvs:/home/jovyan/mock_data 
+    networks:
+      - etl_network
+    depends_on:
+      - spark-master
+
+volumes:
+  pgdata_lab2:
+  clickhouse_data_lab2:
+
+networks:
+  etl_network:
+    driver: bridge
